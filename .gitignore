@@ -9,4 +9,14 @@ wheels/
 # Virtual environments
 .venv
 
+# Data files
 data/*
+
+# Training outputs
+out/
+wandb/
+
+# Model weights
+*.pt
+*.pth
+*.h5
