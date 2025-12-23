@@ -10,10 +10,10 @@ dependencies:
   - matplotlib
   - dask
   - pandas
-  - pytorch=0.4.1
-  - torchvision=0.2.1
   - pillow
   - pip
   - pip:
     - "wandb<0.13.0"
     - imageio
+    - torch==1.0.0
+    - torchvision==0.2.1
