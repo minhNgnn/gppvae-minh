@@ -1,0 +1,14 @@
+name: gppvae
+channels:
+  - soumit
+  - defaults
+dependencies:
+  - python=3.6
+  - numpy
+  - scipy
+  - h5py
+  - matplotlib
+  - dask
+  - pandas
+  - pytorch=0.4.1
+  - torchvision=0.2.1
