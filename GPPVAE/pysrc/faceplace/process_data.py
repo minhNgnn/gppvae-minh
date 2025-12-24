@@ -8,6 +8,19 @@ from PIL import Image
 import os
 import h5py
 
+# Configuration: ethnicity filtering
+# Options: 
+#   None = use all ethnicities (imbalanced: 45% caucasian, 14% african-american)
+#   ['african-american'] = only black faces
+#   ['caucasian'] = only white faces
+#   ['asian', 'caucasian', 'african-american', 'hispanic', 'multiracial'] = all, but can balance
+ETHNICITY_FILTER = None  # Set to list of folder names or None for all
+
+# Whether to balance classes by undersampling (take min count from each ethnicity)
+# If True: will undersample to 432 images per ethnicity (smallest class size)
+# Result: 5 ethnicities × 432 = 2,160 total images (balanced 20% each)
+BALANCE_CLASSES = False  # Set to True to balance ethnicities
+
 # where have been downloaded
 # Use the existing data directory, or allow override via command line
 if len(sys.argv) > 1:
@@ -130,11 +143,78 @@ def import_data(size=128):
     orients = ["90L", "60L", "45L", "30L", "00F", "30R", "45R", "60R", "90R"]
     #          -90°   -60°   -45°   -30°    0°    +30°   +45°   +60°   +90°
     #          idx:0  idx:1  idx:2  idx:3  idx:4  idx:5  idx:6  idx:7  idx:8
+    
+    # Track files by ethnicity
+    files_by_ethnicity = {}
+    
     for orient in orients:
-        _files = glob.glob(os.path.join(data_dir, "*/*_%s.jpg" % orient))
-        files = files + _files
-    # DON'T sort alphabetically - preserve angular order!
-    # files = np.sort(files)  # ← Removed to keep angular ordering
+        if ETHNICITY_FILTER is None:
+            # Load all ethnicities
+            _files = glob.glob(os.path.join(data_dir, "*/*_%s.jpg" % orient))
+        else:
+            # Load only specified ethnicities
+            _files = []
+            for eth in ETHNICITY_FILTER:
+                eth_files = glob.glob(os.path.join(data_dir, eth + "/*_%s.jpg" % orient))
+                _files.extend(eth_files)
+        
+        # Group by ethnicity folder
+        for f in _files:
+            ethnicity = f.split("/")[-2]  # Extract folder name
+            if ethnicity not in files_by_ethnicity:
+                files_by_ethnicity[ethnicity] = []
+            files_by_ethnicity[ethnicity].append(f)
+    
+    # Balance classes if requested
+    if BALANCE_CLASSES and len(files_by_ethnicity) > 1:
+        min_count = min(len(files_by_ethnicity[eth]) for eth in files_by_ethnicity)
+        print(f"\n⚖️  BALANCING CLASSES: undersampling to {min_count} images per ethnicity")
+        
+        balanced_files = {}
+        np.random.seed(42)  # Reproducible sampling
+        for eth in files_by_ethnicity:
+            # Randomly sample min_count files
+            sampled = np.random.choice(files_by_ethnicity[eth], min_count, replace=False)
+            balanced_files[eth] = list(sampled)
+        files_by_ethnicity = balanced_files
+    
+    # Flatten to single list with better mixing across ethnicities
+    # Instead of grouping all of one ethnicity together, interleave them
+    files = []
+    ethnicity_lists = {eth: files_by_ethnicity[eth][:] for eth in sorted(files_by_ethnicity.keys())}
+    
+    # Interleave: take one from each ethnicity in round-robin fashion
+    while any(ethnicity_lists.values()):
+        for eth in sorted(ethnicity_lists.keys()):
+            if ethnicity_lists[eth]:
+                files.append(ethnicity_lists[eth].pop(0))
+    
+    print(f"\n🔀 MIXING: Ethnicities interleaved for better batch diversity")
+    
+    # Print distribution
+    print(f"\n📊 ETHNICITY DISTRIBUTION:")
+    print(f"{'Ethnicity':<20} {'Count':<10} {'Percentage':<12}")
+    print("-" * 50)
+    ethnicity_counts = {eth: len(files_by_ethnicity[eth]) for eth in files_by_ethnicity}
+    total = sum(ethnicity_counts.values())
+    for eth in sorted(ethnicity_counts.keys()):
+        count = ethnicity_counts[eth]
+        pct = 100 * count / total
+        print(f"{eth:<20} {count:<10} {pct:>5.1f}%")
+    print(f"{'TOTAL':<20} {total:<10} 100.0%")
+    
+    if ETHNICITY_FILTER is not None:
+        print(f"\n🔍 FILTER APPLIED: {ETHNICITY_FILTER}")
+    if BALANCE_CLASSES:
+        print(f"⚖️  BALANCED: Each ethnicity has equal representation")
+
+    print(f"\n🔍 VERIFICATION: First 15 files to process:")
+    print(f"{'Index':<6} {'Ethnicity':<20} {'Filename':<40}")
+    print("-" * 80)
+    for i, f in enumerate(files[:15]):
+        ethnicity = f.split("/")[-2]
+        filename = f.split("/")[-1]
+        print(f"{i:<6} {ethnicity:<20} {filename:<40}")
 
     # Did: Dataset/Person ID (unique identifier for each person)
     Did = []
@@ -157,6 +237,18 @@ def import_data(size=128):
         Did.append(did1 + "_" + did2)
         # Store orientation: "00F", "30L", etc.
         Rid.append(rid)
+    
+    # VERIFICATION: Check that parsed Rid matches actual file orientation
+    print(f"\n🔍 VERIFICATION: Did/Rid extraction (first 15 samples):")
+    print(f"{'Index':<6} {'Filename':<50} {'Extracted Did':<15} {'Extracted Rid':<12} {'Match?':<8}")
+    print("-" * 100)
+    for i in range(min(15, len(files))):
+        filename = files[i].split("/")[-1]
+        extracted_did = Did[i]
+        extracted_rid = Rid[i]
+        # Verify: does the filename contain the extracted rid?
+        match = "✅" if extracted_rid in filename else "❌"
+        print(f"{i:<6} {filename:<50} {extracted_did:<15} {extracted_rid:<12} {match:<8}")
 
     # Convert to numpy arrays with byte string type
     Did = np.array(Did, dtype="|S100")
