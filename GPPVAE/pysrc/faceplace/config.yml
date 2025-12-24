@@ -1,0 +1,74 @@
+# Configuration file for VAE and GPPVAE training
+# All hyperparameters are documented below with their purpose and tuning guidelines
+
+# Data parameters
+data:
+  path: "./../data/faceplace/data_faces.h5"  # Path to preprocessed face dataset
+
+# Output parameters
+output:
+  vae_dir: "./../out/vae"      # Directory for VAE outputs
+  gppvae_dir: "./../out/gppvae"  # Directory for GPPVAE outputs
+
+# VAE model architecture parameters
+vae:
+  filts: 32   # Number of convolutional filters in each layer
+              # Controls model capacity: 16 (small), 32 (default), 64 (large)
+  
+  zdim: 256   # Latent dimension size - size of compressed representation
+              # Higher = more expressive but harder to train
+              # Options: 128 (simple), 256 (default), 512 (complex)
+
+# GPPVAE model parameters
+gppvae:
+  xdim: 64    # Rank of object linear covariance (controls GP capacity)
+              # Lower = simpler model, faster training
+              # Higher = more flexible, slower training
+              # Options: 32 (simple), 64 (default), 128 (complex)
+  
+  vae_config: "./../out/vae/vae.cfg.p"  # Path to trained VAE config
+  vae_weights: "./../out/vae/weights/weights.00000.pt"  # Path to trained VAE weights
+
+# Loss function parameters
+loss:
+  vy: 0.002   # Observation noise variance for likelihood term (2e-3)
+              # Controls reconstruction strictness
+              # Lower = model tries harder to reconstruct exactly
+              # Options: 0.001 (sharp), 0.002 (default), 0.005 (smooth/blurry)
+
+# Training parameters
+training:
+  # VAE training
+  vae_lr: 0.0002      # Learning rate for VAE Adam optimizer (2e-4)
+                      # Controls update step size
+                      # Options: 0.0001 (slow/stable), 0.0002 (default), 0.0005 (fast/unstable)
+  
+  # GPPVAE training
+  gp_lr: 0.001        # Learning rate for GP parameters (1e-3)
+                      # Usually higher than VAE lr since GP is simpler
+                      # Options: 0.0005 (slow), 0.001 (default), 0.002 (fast)
+  
+  batch_size: 64  # Number of images processed together
+                  # Larger = more stable gradients but more memory
+                  # Options: 32 (less memory), 64 (default), 128 (more memory)
+  
+  epochs: 10000   # Total number of training epochs
+                  # One epoch = one full pass through training data
+                  # Options: 1000 (quick test), 5000 (decent), 10000 (full training)
+  
+  seed: 0         # Random seed for reproducibility
+
+# Logging and checkpointing
+logging:
+  epoch_callback: 100  # Save weights and plots every N epochs
+                       # Lower = more frequent saves but more disk space
+                       # Options: 50 (frequent), 100 (default), 200 (sparse)
+
+# Weights & Biases configuration
+wandb:
+  enabled: false      # Enable W&B logging
+  project: "gppvae"   # W&B project name
+  run_name: null      # W&B run name (null = auto-generated)
+
+# Debugging
+debug: false  # Enable debug mode (drops into pdb debugger)
