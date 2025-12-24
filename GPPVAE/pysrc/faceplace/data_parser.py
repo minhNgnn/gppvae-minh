@@ -1,8 +1,6 @@
 import matplotlib
 
 matplotlib.use("Agg")
-import scipy.stats as st
-import scipy.linalg as la
 import pylab as pl
 import os
 import copy
@@ -13,9 +11,8 @@ from utils import smartDumpDictHdf5, smartAppend
 import h5py
 import dask.array as da
 import pandas as pd
-import numpy as np  # Changed from scipy as sp to numpy as np
+import numpy as np
 from PIL import Image
-import scipy.ndimage as img
 from torch.utils.data import Dataset
 import torch
 
@@ -64,7 +61,12 @@ def read_face_data(h5fn):
         D[key] = np.array([table[_id] for _id in Did[key]])[:, np.newaxis]
 
     # one hot encode views
-    uRid = np.unique(np.concatenate([Rid[key] for key in keys]))
+    # IMPORTANT: Preserve angular ordering from data generation!
+    # Use the order views appear in train set (already in angular order from process_data.py)
+    # instead of np.unique which sorts alphabetically
+    _, unique_indices = np.unique(Rid["train"], return_index=True)
+    uRid = Rid["train"][np.sort(unique_indices)]  # Get unique views in order of first appearance
+    
     table_w = {}
     for _i, _id in enumerate(uRid):
         table_w[_id] = _i

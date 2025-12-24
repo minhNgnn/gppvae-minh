@@ -3,9 +3,6 @@ import sys
 sys.path.append("./..")
 import pdb
 import os
-import scipy as sp
-import scipy.stats as st
-import scipy.linalg as la
 import numpy as np
 import pylab as pl
 import torch

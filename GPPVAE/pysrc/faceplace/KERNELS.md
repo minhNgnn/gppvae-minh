@@ -206,20 +206,141 @@ plt.savefig('kernel_comparison.png')
 
 ## Performance Considerations
 
-| Kernel | Parameters | Computation | Memory |
-|--------|------------|-------------|--------|
-| Full Rank | Q²/2 | O(Q²) | O(Q²) |
-| Linear | Q×r | O(Nr²) | O(Nr) |
-| RBF | 1 | O(N²) | O(N²) |
-| Periodic | 1 | O(N²) | O(N²) |
-| Rational Quadratic | 2 | O(N²) | O(N²) |
-| Matérn | 1 | O(N²) | O(N²) |
-| Von Mises | 1 | O(N²) | O(N²) |
+**IMPORTANT**: All kernels maintain the same O(Nr²Q²) complexity as the original GP-VAE! The view kernel is Q×Q where Q=9, which is tiny, so the overhead is negligible.
+
+### Complexity Analysis
+
+The GP-VAE uses a **Kronecker-structured kernel**:
+```
+K_total = v₀·(K_object ⊗ K_view) + v₁·I
+```
+
+Where:
+- **Object kernel**: Rank-r (typically r=64), size N×N → O(Nr²) via Woodbury identity
+- **View kernel**: Full Q×Q (Q=9), size 9×9 → Q² = 81 operations (constant!)
+
+The **Woodbury identity** applies to the object kernel (inverting r×r instead of N×N), not the view kernel. Since Q=9 is small, even a full Q×Q kernel adds only ~81 operations, which is negligible compared to the O(Nr²) ≈ O(N·4096) cost of the object kernel.
+
+### Performance Table
+
+| Kernel | Parameters | View Matrix Cost | Total Complexity | Works with Woodbury? |
+|--------|------------|------------------|------------------|---------------------|
+| Legacy (q=Q) | 81 (normalized) | O(Q²) = 81 ops | O(Nr²Q²) ✅ | ✅ YES |
+| Full Rank | 45 (triangular) | O(Q³) = 243 ops (Cholesky) | O(Nr²Q²) ✅ | ✅ YES |
+| Linear (rank r) | Q×r | O(Qr²) | O(Nr²Q²) ✅ | ✅ YES |
+| RBF | 1 | O(Q²) = 81 ops | O(Nr²Q²) ✅ | ✅ YES |
+| Periodic | 1 | O(Q²) = 81 ops | O(Nr²Q²) ✅ | ✅ YES |
+| Rational Quadratic | 2 | O(Q²) = 81 ops | O(Nr²Q²) ✅ | ✅ YES |
+| Matérn | 1 | O(Q²) = 81 ops | O(Nr²Q²) ✅ | ✅ YES |
+| Von Mises | 1 | O(Q²) = 81 ops | O(Nr²Q²) ✅ | ✅ YES |
+
+**Key Insight**: Since Q=9 is tiny, the view kernel computation (81-243 operations) is a **negligible constant overhead** compared to the O(Nr²) object kernel operations (thousands to millions of ops).
+
+### Speed Comparison
+
+With N=1000 objects, r=64 object rank, Q=9 views:
+- **Object kernel cost**: O(Nr²) = 1000 × 4096 = **4,096,000 operations**
+- **View kernel cost**: O(Q²) = 81 = **81 operations** (0.002% overhead!)
+- **Cholesky overhead**: O(Q³) = 243 extra ops for structured kernels (0.006% overhead!)
+
+**Conclusion**: All kernels have **identical practical speed**. Choose based on **loss/generalization**, not speed!
+
+### Memory Usage
+
+| Kernel | Learnable Parameters | Memory Overhead |
+|--------|---------------------|-----------------|
+| Legacy (q=Q) | 81 | Minimal |
+| Full Rank | 45 | Minimal |
+| Linear (rank=3) | 27 | Minimal |
+| RBF/Periodic/Matérn/Von Mises | 1 | **Tiny!** |
+| Rational Quadratic | 2 | **Tiny!** |
 
 Where:
 - Q = number of views (e.g., 9)
 - r = rank (for linear kernel)
-- N = batch size
+- N = number of objects (e.g., 1000)
+
+**Regularization Effect**: Structured kernels with 1-2 parameters provide massive regularization compared to 45-81 free parameters!
+
+## Kernel Comparison Methodology
+
+### Metrics to Track
+
+When comparing different kernels, track these metrics:
+
+#### 1. **Reconstruction Loss**
+- **MSE_train**: Mean squared error on training set
+- **MSE_val**: Mean squared error on validation set  
+- **MSE_out**: Out-of-sample prediction (interpolating missing views)
+
+**Expected behavior:**
+- Legacy/FullRank: Lowest train MSE (can overfit)
+- Periodic/VonMises: Better val/out MSE (generalize better)
+
+#### 2. **Variance Decomposition**
+Track the learned variance components:
+- **v₀**: Object-specific variance (shared across views)
+- **v₁**: View-specific variance (independent noise)
+- **Ratio v₀/v₁**: How much structure vs noise
+
+**Interpretation:**
+- High v₀/v₁: Model learned meaningful view structure
+- Low v₀/v₁: Model treats views as independent noise
+
+#### 3. **Kernel Hyperparameters**
+For structured kernels, track learned parameters:
+- **Periodic/RBF**: Lengthscale ℓ (how fast correlation decays)
+- **Von Mises**: Kappa κ (concentration)
+- **Linear**: Effective rank of V@V^T
+
+**What they mean:**
+- Small ℓ or large κ: Only nearby views correlated
+- Large ℓ or small κ: Even distant views correlated
+
+#### 4. **Generalization Gap**
+- **Gap = MSE_train - MSE_val**
+- **Smaller gap = better regularization**
+
+**Expected ranking:**
+- Structured (1-2 params) < FullRank (45 params) < Legacy (81 params)
+
+### Recommended Plots
+
+#### 📈 **1. Learning Curves**
+Plot training and validation loss over epochs for each kernel. Should show:
+- Legacy: Lowest training loss, higher validation loss (overfitting)
+- Periodic/VonMises: Slightly higher training, better validation (good generalization)
+
+#### 🎨 **2. Learned Kernel Matrices** (Most Insightful!)
+Visualize the learned K matrices as heatmaps. Look for:
+- **Periodic**: Smooth block diagonal, K[0,8] ≈ 1 (wraparound!)
+- **Legacy**: Random structure (no interpretable pattern)
+- **VonMises**: Sharp diagonal, smooth decay
+- **FullRank**: Arbitrary learned structure
+
+#### 📊 **3. Variance Decomposition Bar Chart**
+Compare v₀, v₁, and v₀/v₁ ratio across kernels. Higher v₀/v₁ indicates the model learned meaningful structure.
+
+#### 🎯 **4. Out-of-Sample Prediction Visualization**
+Hold out one view (e.g., 45°), predict from others, show ground truth vs prediction for each kernel. Periodic/VonMises should give sharper predictions.
+
+#### ⏱️ **5. Training Time Comparison**
+Verify all kernels have similar training time (proof that Q=9 overhead is negligible!).
+
+### Expected Results
+
+| Metric | Legacy | FullRank | Periodic | Von Mises |
+|--------|--------|----------|----------|-----------|
+| **Train MSE** | **Lowest** | Low | Medium | Medium |
+| **Val MSE** | Medium | Medium | **Lowest** | **Lowest** |
+| **Out-of-sample** | Worst | Bad | **Best** | **Best** |
+| **Gap (overfit)** | Largest | Large | Small | Small |
+| **v₀/v₁** | Medium | Medium | **High** | **High** |
+| **Speed** | ≈ | ≈ | ≈ | ≈ |
+| **Parameters** | 81 | 45 | 1 | 1 |
+| **Interpretability** | Low | Low | **High** | **High** |
+
+**Winner**: Periodic or Von Mises for rotation data (better generalization, fewer parameters, interpretable structure)
 
 ## References
 
@@ -237,3 +358,5 @@ python kernels.py
 ```
 
 This will create `kernel_comparison.png` showing all kernel matrices.
+
+

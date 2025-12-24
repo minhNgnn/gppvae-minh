@@ -257,7 +257,17 @@ def main():
     # define gp
     P = np.unique(obj["train"]).shape[0]
     Q = np.unique(view["train"]).shape[0]
-    vm = Vmodel(P, Q, opt['xdim'], Q).cuda()
+    
+    # Get kernel configuration
+    view_kernel = opt.get('view_kernel', 'legacy')
+    kernel_kwargs = opt.get('kernel_kwargs', {})
+    
+    # Create Vmodel with kernel
+    vm = Vmodel(P, Q, opt['xdim'], q=Q, view_kernel=view_kernel, **kernel_kwargs).cuda()
+    logging.info(f"Using view kernel: {view_kernel}")
+    if kernel_kwargs:
+        logging.info(f"Kernel parameters: {kernel_kwargs}")
+    
     gp = GP(n_rand_effs=1).to(device)
     gp_params = nn.ParameterList()
     gp_params.extend(vm.parameters())

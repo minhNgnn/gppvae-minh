@@ -4,7 +4,7 @@ from torch import nn, optim
 import torch.nn.functional as F
 from torch.autograd import Variable
 import h5py
-import scipy as sp
+import numpy as np
 import os
 import pdb
 import pylab as pl

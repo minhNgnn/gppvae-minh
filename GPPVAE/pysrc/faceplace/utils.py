@@ -1,4 +1,4 @@
-import scipy as sp
+import numpy as np
 import sys
 import warnings
 import shutil
@@ -33,7 +33,7 @@ def smartDumpDictHdf5(RV, o):
             smartDumpDictHdf5(RV[key], g)
         else:
             o.create_dataset(
-                name=key, data=sp.array(RV[key]), chunks=True, compression="gzip"
+                name=key, data=np.array(RV[key]), chunks=True, compression="gzip"
             )
 
 
