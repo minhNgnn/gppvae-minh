@@ -11,7 +11,7 @@ from vae import FaceVAE
 from vmod import Vmodel
 from gp import GP
 import h5py
-import scipy as sp
+import numpy as np
 import os
 import pdb
 import logging
@@ -249,8 +249,8 @@ def main():
     vae.to(device)
 
     # define gp
-    P = sp.unique(obj["train"]).shape[0]
-    Q = sp.unique(view["train"]).shape[0]
+    P = np.unique(obj["train"]).shape[0]
+    Q = np.unique(view["train"]).shape[0]
     vm = Vmodel(P, Q, opt['xdim'], Q).cuda()
     gp = GP(n_rand_effs=1).to(device)
     gp_params = nn.ParameterList()
@@ -366,7 +366,7 @@ def eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv):
 
         _X = vm.x().data.cpu().numpy()
         _W = vm.v().data.cpu().numpy()
-        covs = {"XX": sp.dot(_X, _X.T), "WW": sp.dot(_W, _W.T)}
+        covs = {"XX": np.dot(_X, _X.T), "WW": np.dot(_W, _W.T)}
         rv["vars"] = gp.get_vs().data.cpu().numpy()
         # out of sample
         vs = gp.get_vs()

@@ -3,7 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import h5py
-import scipy as sp
+import numpy as np
 import os
 import pdb
 
@@ -138,20 +138,20 @@ if __name__ == "__main__":
     def generate_data(N, S, L):
 
         # generate genetics
-        G = 1.0 * (sp.rand(N, S) < 0.2)
+        G = 1.0 * (np.random.rand(N, S) < 0.2)
         G -= G.mean(0)
-        G /= G.std(0) * sp.sqrt(G.shape[1])
+        G /= G.std(0) * np.sqrt(G.shape[1])
 
         # generate latent phenotypes
-        Zg = sp.dot(G, sp.randn(G.shape[1], L))
-        Zn = sp.randn(N, L)
+        Zg = np.dot(G, np.random.randn(G.shape[1], L))
+        Zn = np.random.randn(N, L)
 
         # generate variance exapleind
-        vg = sp.linspace(0.8, 0, L)
+        vg = np.linspace(0.8, 0, L)
 
         # rescale and sum
-        Zg *= sp.sqrt(vg / Zg.var(0))
-        Zn *= sp.sqrt((1 - vg) / Zn.var(0))
+        Zg *= np.sqrt(vg / Zg.var(0))
+        Zn *= np.sqrt((1 - vg) / Zn.var(0))
         Z = Zg + Zn
 
         return Z, G
@@ -238,7 +238,7 @@ if __name__ == "__main__":
             # append stuff
             smartAppend(history, "nll", float(nll.data.cpu()))
             smartAppend(history, "vs", gp.get_vs().data.cpu().numpy())
-        history["vs"] = sp.array(history["vs"])
+        history["vs"] = np.array(history["vs"])
 
         pl.subplot(221)
         pl.plot(history["nll"])
