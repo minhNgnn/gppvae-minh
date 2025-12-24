@@ -25,6 +25,7 @@ import pickle
 import time
 import wandb
 import yaml
+from datetime import datetime
 
 
 def load_config(yaml_path=None):
@@ -183,6 +184,11 @@ if args.wandb_run_name is not None:
 
 # Load VAE config
 vae_cfg = pickle.load(open(opt['vae_cfg'], "rb"))
+
+# Add timestamp to output directory for unique runs
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+base_outdir = opt['outdir']
+opt['outdir'] = os.path.join(base_outdir, timestamp)
 
 if not os.path.exists(opt['outdir']):
     os.makedirs(opt['outdir'])

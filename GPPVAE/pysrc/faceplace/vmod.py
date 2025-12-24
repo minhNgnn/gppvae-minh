@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-import scipy as sp
+import numpy as np
 import os
 import pdb
 
@@ -52,8 +52,8 @@ if __name__ == "__main__":
     vm = Vmodel(P, Q, p, q).cuda()
 
     # _d and _w
-    _d = sp.kron(sp.arange(P), sp.ones(2))
-    _w = sp.kron(sp.ones(2), sp.arange(Q))
+    _d = np.kron(np.arange(P), np.ones(2))
+    _w = np.kron(np.ones(2), np.arange(Q))
 
     # d and w
     d = Variable(torch.Tensor(_d).long(), requires_grad=False).cuda()

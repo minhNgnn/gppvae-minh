@@ -9,7 +9,6 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from vae import FaceVAE
 import h5py
-import scipy as sp
 import os
 import pdb
 import logging
@@ -23,6 +22,7 @@ import pickle
 import time
 import wandb
 import yaml
+from datetime import datetime
 
 
 def load_config(yaml_path=None):
@@ -167,6 +167,11 @@ if args.wandb_project is not None:
 if args.wandb_run_name is not None:
     opt['wandb_run_name'] = args.wandb_run_name
 
+
+# Add timestamp to output directory for unique runs
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+base_outdir = opt['outdir']
+opt['outdir'] = os.path.join(base_outdir, timestamp)
 
 if not os.path.exists(opt['outdir']):
     os.makedirs(opt['outdir'])
