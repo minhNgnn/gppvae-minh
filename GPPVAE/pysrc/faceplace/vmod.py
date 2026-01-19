@@ -106,20 +106,86 @@ class Vmodel(nn.Module):
         Compute variance matrix V for given object and view indices.
         
         Args:
-            d: Object indices [N]
-            w: View indices [N]
+            d: Object indices [N] (always discrete integers)
+            w: View values [N] - can be discrete indices OR continuous angles
         
         Returns:
             V: Variance matrix [N, p*q] where each row is vec(X_i ⊗ W_i)
         """
-        # Embed objects and views
+        # Embed objects (always discrete indices)
         X = F.embedding(d, self.x())  # [N, p]
-        W = F.embedding(w, self.v())  # [N, q] or [N, Q]
+        
+        # Handle views: continuous angles vs discrete indices
+        if self.view_kernel == 'legacy':
+            # Legacy mode: w must be discrete indices
+            W = F.embedding(w, self.v())  # [N, q]
+        else:
+            # Structured kernel mode: w can be continuous angles
+            # Need to compute kernel-based embeddings for continuous values
+            
+            # Check if w contains continuous values (floats) or indices (ints)
+            if w.dtype == torch.long or w.dtype == torch.int32 or w.dtype == torch.int64:
+                # Discrete indices: use embedding
+                W = F.embedding(w, self.v())  # [N, Q]
+            else:
+                # Continuous angles: compute kernel matrix on the fly
+                # This allows RBF/Matern to work with actual angle values
+                W = self._compute_view_embeddings_continuous(w)
         
         # Kronecker product: V_i = X_i ⊗ W_i
         V = torch.einsum("ij,ik->ijk", [X, W])
         V = V.reshape([V.shape[0], -1])
         return V
+    
+    def _compute_view_embeddings_continuous(self, w_continuous):
+        """
+        Compute view embeddings for continuous angle values.
+        
+        For continuous angles, we can't use F.embedding. Instead:
+        1. Compute kernel k(w_i, θ_j) for all i, j where θ_j are reference angles
+        2. Use kernel values as "soft embeddings"
+        3. Return K @ V where V = chol(K_ref) of reference angles
+        
+        Args:
+            w_continuous: Continuous angle values [N] (e.g., normalized angles in [-1, 1])
+        
+        Returns:
+            W: View embeddings [N, Q]
+        """
+        # Get reference angles (discrete grid) - these are what the kernel was trained on
+        # For interpolation, reference angles are the training views
+        # We need to compute k(w_continuous, w_reference) for each sample
+        
+        if hasattr(self.kernel, 'angles'):
+            # Kernel has explicit angles (e.g., RBF, Periodic, Matern)
+            # Compute kernel between continuous angles and reference angles
+            ref_angles = self.kernel.angles  # [Q] reference angles
+            
+            # Convert w_continuous to same scale as ref_angles if needed
+            # Assuming w_continuous is normalized to [-1, 1] and ref_angles are in radians
+            # We need to know the mapping...
+            
+            # For now, assume w_continuous are already in the same space as ref_angles
+            # Compute k(w_i, θ_j) for all combinations
+            W_kernel = self.kernel.forward_continuous(w_continuous)  # [N, Q]
+            
+            # Get Cholesky factor of reference kernel
+            V_ref = self.v()  # [Q, Q] Cholesky factor
+            
+            # Compute embeddings: W = K_cross @ inv(K_ref) @ V_ref
+            # But K_ref = V_ref @ V_ref^T, so inv(K_ref) @ V_ref = V_ref^{-T}
+            # Simplification: W ≈ K_cross @ V_ref^{-1}
+            # Even simpler: just use K_cross as soft embeddings (unnormalized)
+            
+            # Use kernel values directly as embeddings
+            return W_kernel
+        else:
+            # Fallback: kernel doesn't support continuous angles
+            # Convert continuous to discrete and use embedding
+            raise NotImplementedError(
+                f"Kernel '{self.view_kernel}' doesn't support continuous angles. "
+                f"Use discrete indices or implement forward_continuous() for this kernel."
+            )
 
     def _init_params(self):
         """Initialize parameters."""

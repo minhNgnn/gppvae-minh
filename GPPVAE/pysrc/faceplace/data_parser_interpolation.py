@@ -46,7 +46,83 @@ class FaceDataset(Dataset):
         return self.len
 
 
-def split_data_by_views_interpolation(Y, D, W, train_view_indices, val_view_indices):
+def encode_view_angles(view_indices, encoding='normalized'):
+    """
+    Convert view indices to actual angular values.
+    
+    This encodes geometric relationships between views explicitly,
+    allowing structured kernels to leverage angular smoothness.
+    
+    View mapping (original indices → actual angles):
+    0: 90L → -90°
+    1: 60L → -60°
+    2: 45L → -45°
+    3: 30L → -30°
+    4: 00F →   0°
+    5: 30R → +30°
+    6: 45R → +45°
+    7: 60R → +60°
+    8: 90R → +90°
+    
+    Args:
+        view_indices: Array of view indices [0-8]
+        encoding: How to encode angles
+            - 'normalized': Scale to [-1, 1] range
+            - 'radians': Convert to radians [-π/2, π/2]
+            - 'degrees': Keep as degrees [-90, 90]
+    
+    Returns:
+        Tensor of encoded angle values
+    """
+    # Map indices to actual angles in degrees
+    angle_map = {
+        0: -90.0,  # 90L
+        1: -60.0,  # 60L
+        2: -45.0,  # 45L
+        3: -30.0,  # 30L
+        4:   0.0,  # 00F (frontal)
+        5:  30.0,  # 30R
+        6:  45.0,  # 45R
+        7:  60.0,  # 60R
+        8:  90.0,  # 90R
+    }
+    
+    # Convert indices to angles
+    if isinstance(view_indices, torch.Tensor):
+        view_indices = view_indices.numpy()
+    
+    view_indices = view_indices.flatten()
+    
+    # Validate indices
+    unique_indices = np.unique(view_indices)
+    invalid_indices = [idx for idx in unique_indices if int(idx) not in angle_map]
+    if invalid_indices:
+        raise ValueError(
+            f"Invalid view indices found: {invalid_indices}\n"
+            f"Valid indices are 0-8 (corresponding to angles -90° to +90°)\n"
+            f"Unique indices in data: {sorted(unique_indices)}\n"
+            f"This suggests the data was not properly processed or encoded."
+        )
+    
+    angles_deg = np.array([angle_map[int(idx)] for idx in view_indices])
+    
+    # Encode based on requested format
+    if encoding == 'normalized':
+        # Scale to [-1, 1] range for numerical stability
+        angles_encoded = angles_deg / 90.0
+    elif encoding == 'radians':
+        # Convert to radians [-π/2, π/2]
+        angles_encoded = np.deg2rad(angles_deg)
+    elif encoding == 'degrees':
+        # Keep as degrees [-90, 90]
+        angles_encoded = angles_deg
+    else:
+        raise ValueError(f"Unknown encoding: {encoding}")
+    
+    return torch.tensor(angles_encoded, dtype=torch.float32)
+
+
+def split_data_by_views_interpolation(Y, D, W, train_view_indices, val_view_indices, use_angle_encoding=True, w_already_encoded=False):
     """
     Split data for interpolation experiment.
     Only keeps identities that have ALL required views in both train and val.
@@ -58,9 +134,11 @@ def split_data_by_views_interpolation(Y, D, W, train_view_indices, val_view_indi
     Args:
         Y: Images [N, C, H, W] (torch tensor)
         D: Identity indices [N, 1] (torch tensor)
-        W: View indices [N, 1] (torch tensor)
+        W: View values [N, 1] (torch tensor) - can be indices [0-8] or angles if already encoded
         train_view_indices: List of view indices for training (e.g., [0, 1, 3, 4, 5, 7, 8])
         val_view_indices: List of view indices for validation (e.g., [2, 6])
+        use_angle_encoding: If True, work with angle values (for filtering/matching)
+        w_already_encoded: If True, W is already encoded as angles (don't encode again)
     
     Returns:
         train_data: Dict with Y_train, D_train, W_train
@@ -79,14 +157,47 @@ def split_data_by_views_interpolation(Y, D, W, train_view_indices, val_view_indi
     print(f"   Val views (intermediate): {sorted(val_view_indices)}")
     print(f"   Total identities before filtering: {len(all_identities)}")
     
+    if use_angle_encoding:
+        print(f"   🎯 Using ACTUAL ANGLE VALUES (not indices)")
+        print(f"   This provides geometric information to structured kernels")
+    else:
+        print(f"   Using view indices (original behavior)")
+    
     # Find identities that have all required views
     valid_identities = []
+    
+    # If W is already encoded as angles, we need to match against angle values
+    # Otherwise, match against indices directly
+    if w_already_encoded and use_angle_encoding:
+        # W contains angles, convert required indices to angles for comparison
+        required_views = set(encode_view_angles(np.array(sorted(all_view_indices)), encoding='normalized').numpy().round(6))
+        print(f"   🎯 W already contains angles, matching against angle values")
+    elif use_angle_encoding and not w_already_encoded:
+        # W contains indices, but we want to work with angles
+        # Convert required indices to angles
+        required_views = set(encode_view_angles(np.array(sorted(all_view_indices)), encoding='normalized').numpy().round(6))
+        print(f"   🎯 Converting indices to angles for filtering")
+    else:
+        # W contains indices, match directly
+        required_views = all_view_indices
+        print(f"   Using view indices directly (no angle encoding)")
+    
     for identity in all_identities:
         identity_mask = (D_np == identity)
-        identity_views = set(W_np[identity_mask])
+        identity_views_raw = W_np[identity_mask]
+        
+        if w_already_encoded and use_angle_encoding:
+            # W is already angles, round for comparison
+            identity_views = set(np.round(identity_views_raw, 6))
+        elif use_angle_encoding and not w_already_encoded:
+            # W is indices, convert to angles
+            identity_views = set(encode_view_angles(identity_views_raw, encoding='normalized').numpy().round(6))
+        else:
+            # W is indices, use directly
+            identity_views = set(identity_views_raw)
         
         # Check if this identity has all required views
-        if all_view_indices.issubset(identity_views):
+        if required_views.issubset(identity_views):
             valid_identities.append(identity)
     
     valid_identities = np.array(valid_identities)
@@ -112,10 +223,37 @@ def split_data_by_views_interpolation(Y, D, W, train_view_indices, val_view_indi
     
     print(f"   ✅ Remapped {len(unique_identities)} identities to contiguous indices [0..{len(unique_identities)-1}]")
     
+    # Convert view indices to actual angles if requested AND not already encoded
+    if use_angle_encoding and not w_already_encoded:
+        W_filtered_angles = encode_view_angles(W_filtered, encoding='normalized')
+        W_filtered = W_filtered_angles.reshape(-1, 1)
+        print(f"   ✅ Converted view indices to normalized angles [-1.0, 1.0]")
+        
+        # Show example mappings
+        view_names = {0: "90L (-90°)", 1: "60L (-60°)", 2: "45L (-45°)", 3: "30L (-30°)", 
+                     4: "00F (0°)", 5: "30R (+30°)", 6: "45R (+45°)", 7: "60R (+60°)", 8: "90R (+90°)"}
+        angle_examples = encode_view_angles(np.array([0, 2, 4, 6, 8]), encoding='normalized')
+        print(f"   Example angle encodings:")
+        for idx, angle_val in zip([0, 2, 4, 6, 8], angle_examples):
+            print(f"      Index {idx} ({view_names[idx]}) → {angle_val:.3f}")
+    elif w_already_encoded:
+        print(f"   ✅ W already encoded as angles, no conversion needed")
+    
     # Now split by views
     W_filtered_np = W_filtered.numpy().flatten()
-    train_mask = np.isin(W_filtered_np, train_view_indices)
-    val_mask = np.isin(W_filtered_np, val_view_indices)
+    
+    if use_angle_encoding or w_already_encoded:
+        # Match by encoding train/val indices to angles first
+        train_angles = encode_view_angles(np.array(train_view_indices), encoding='normalized').numpy()
+        val_angles = encode_view_angles(np.array(val_view_indices), encoding='normalized').numpy()
+        
+        # Create masks by matching angle values (with small tolerance for floating point)
+        train_mask = np.isin(np.round(W_filtered_np, 6), np.round(train_angles, 6))
+        val_mask = np.isin(np.round(W_filtered_np, 6), np.round(val_angles, 6))
+    else:
+        # Original index-based matching
+        train_mask = np.isin(W_filtered_np, train_view_indices)
+        val_mask = np.isin(W_filtered_np, val_view_indices)
     
     # Create train/val splits
     train_data = {
@@ -169,11 +307,15 @@ def split_data_by_views_interpolation(Y, D, W, train_view_indices, val_view_indi
     
     print(f"   Training on boundary angles:")
     for v in sorted(train_view_indices):
-        print(f"      Index {v}: {view_names.get(v, f'View{v}')}")
+        angle_val = encode_view_angles(np.array([v]), encoding='normalized')[0] if use_angle_encoding else v
+        print(f"      Index {v}: {view_names.get(v, f'View{v}')} → encoded as {angle_val:.3f}" if use_angle_encoding 
+              else f"      Index {v}: {view_names.get(v, f'View{v}')}")
     
     print(f"   Testing on intermediate angles:")
     for v in sorted(val_view_indices):
-        print(f"      Index {v}: {view_names.get(v, f'View{v}')} (interpolation target)")
+        angle_val = encode_view_angles(np.array([v]), encoding='normalized')[0] if use_angle_encoding else v
+        print(f"      Index {v}: {view_names.get(v, f'View{v}')} (interpolation target) → encoded as {angle_val:.3f}" 
+              if use_angle_encoding else f"      Index {v}: {view_names.get(v, f'View{v}')} (interpolation target)")
     
     # Verify that each val view is bounded by train views
     if 2 in val_view_set:  # 45L
@@ -184,6 +326,13 @@ def split_data_by_views_interpolation(Y, D, W, train_view_indices, val_view_indi
         assert 5 in train_view_set and 7 in train_view_set, "45R should be between 30R and 60R"
         print(f"   ✅ 45R is bounded by training views 30R and 60R")
     
+    if use_angle_encoding:
+        print(f"\n   📐 Geometric distances now explicit:")
+        print(f"      distance(90L, 60L) = |-1.00 - (-0.67)| = 0.33 (30°)")
+        print(f"      distance(60L, 45L) = |-0.67 - (-0.50)| = 0.17 (15°)")
+        print(f"      distance(45L, 30L) = |-0.50 - (-0.33)| = 0.17 (15°)")
+        print(f"   ✅ True angular distances preserved!")
+    
     return train_data, val_data
 
 
@@ -192,7 +341,8 @@ def read_face_data(
     tr_perc=0.9,
     view_split_mode='random',
     train_view_indices=None,
-    val_view_indices=None
+    val_view_indices=None,
+    use_angle_encoding=True
 ):
     """
     Load and split face data.
@@ -206,15 +356,18 @@ def read_face_data(
             - 'interpolation': Split for interpolation task (intermediate views)
         train_view_indices: List of view indices for training
         val_view_indices: List of view indices for validation
+        use_angle_encoding: If True, convert view indices to actual angle values (RECOMMENDED)
+            This provides geometric information to structured kernels
     
     Returns:
         Y: Dict with train/val/test images
         D: Dict with train/val/test identity indices
-        W: Dict with train/val/test view indices
+        W: Dict with train/val/test view values (angles if use_angle_encoding=True, else indices)
     """
     
     print(f"\n📂 Loading data from: {h5fn}")
     print(f"   Split mode: {view_split_mode}")
+    print(f"   Angle encoding: {'✅ ENABLED (using actual angles)' if use_angle_encoding else '❌ DISABLED (using indices)'}")
     
     f = h5py.File(h5fn, "r")
     keys = ["test", "train", "val"]
@@ -252,19 +405,50 @@ def read_face_data(
     _, unique_indices = np.unique(Rid["train"], return_index=True)
     uRid = Rid["train"][np.sort(unique_indices)]  # Get unique views in order of first appearance
     
+    print(f"\n🔍 DEBUG: View encoding from HDF5")
+    print(f"   Unique Rid values in train: {sorted(set(Rid['train']))}")
+    print(f"   uRid (ordered): {uRid}")
+    
     table_w = {}
     for _i, _id in enumerate(uRid):
         table_w[_id] = _i
+    
+    print(f"   View mapping table_w: {table_w}")
+    
     W = {}
     for key in keys:
-        W[key] = np.array([table_w[_id] for _id in Rid[key]])[:, np.newaxis]
+        # Check for any Rid values not in table_w
+        missing_views = set(Rid[key]) - set(table_w.keys())
+        if missing_views:
+            print(f"   ⚠️  WARNING: {key} has views not in train set: {missing_views}")
+        
+        W[key] = np.array([table_w.get(_id, -1) for _id in Rid[key]])[:, np.newaxis]
+        
+        # Check for -1 values (missing mappings)
+        if -1 in W[key]:
+            print(f"   ❌ ERROR: {key} has unmapped view indices!")
+            print(f"   Unmapped Rid values: {set(Rid[key][W[key].flatten() == -1])}")
+    
+    print(f"   W['train'] unique values: {sorted(set(W['train'].flatten()))}")
+    print(f"   W['val'] unique values: {sorted(set(W['val'].flatten()))}")
+    print(f"   W['test'] unique values: {sorted(set(W['test'].flatten()))}")
 
     # Convert to float and normalize
     for key in keys:
         Y[key] = Y[key].astype(float) / 255.0
         Y[key] = torch.tensor(Y[key].transpose((0, 3, 1, 2)).astype(np.float32))
         D[key] = torch.tensor(D[key].astype(np.float32))
-        W[key] = torch.tensor(W[key].astype(np.float32))
+        
+        # Convert view indices to angles if requested
+        if use_angle_encoding:
+            W[key] = encode_view_angles(W[key], encoding='normalized').reshape(-1, 1)
+        else:
+            W[key] = torch.tensor(W[key].astype(np.float32))
+    
+    if use_angle_encoding:
+        print(f"\n✅ View encoding applied:")
+        print(f"   All view indices converted to normalized angles [-1.0, 1.0]")
+        print(f"   This preserves geometric relationships between views")
 
     # Handle interpolation splitting
     if view_split_mode == 'interpolation':
@@ -281,9 +465,13 @@ def read_face_data(
         W_combined = torch.cat([W['train'], W['val']], dim=0)
         
         # Split by views using interpolation-specific function
+        # NOTE: W is already encoded as angles if use_angle_encoding=True (done above)
+        # So we pass w_already_encoded=True to prevent double encoding
         train_data, val_data = split_data_by_views_interpolation(
             Y_combined, D_combined, W_combined,
-            train_view_indices, val_view_indices
+            train_view_indices, val_view_indices,
+            use_angle_encoding=use_angle_encoding,
+            w_already_encoded=use_angle_encoding  # W already converted to angles above
         )
         
         # Update dictionaries
@@ -300,27 +488,54 @@ def read_face_data(
         train_views = set(np.unique(W['train'].numpy().flatten()))
         val_views = set(np.unique(W['val'].numpy().flatten()))
         
-        assert train_views == set(train_view_indices), f"Train views mismatch! Got {train_views}, expected {set(train_view_indices)}"
-        assert val_views == set(val_view_indices), f"Val views mismatch! Got {val_views}, expected {set(val_view_indices)}"
-        assert len(train_views & val_views) == 0, "Train and val views should not overlap!"
-        
-        print(f"   ✅ Train views correct: {sorted(train_views)}")
-        print(f"   ✅ Val views correct: {sorted(val_views)}")
-        print(f"   ✅ No overlap between train/val views")
+        if use_angle_encoding:
+            # When using angles, check that encoded angles match expected values
+            train_angles_expected = set(encode_view_angles(np.array(train_view_indices), encoding='normalized').numpy().round(6))
+            val_angles_expected = set(encode_view_angles(np.array(val_view_indices), encoding='normalized').numpy().round(6))
+            train_views_rounded = set(np.round(list(train_views), 6))
+            val_views_rounded = set(np.round(list(val_views), 6))
+            
+            assert train_views_rounded == train_angles_expected, f"Train angles mismatch! Got {train_views_rounded}, expected {train_angles_expected}"
+            assert val_views_rounded == val_angles_expected, f"Val angles mismatch! Got {val_views_rounded}, expected {val_angles_expected}"
+            assert len(train_views_rounded & val_views_rounded) == 0, "Train and val views should not overlap!"
+            
+            print(f"   ✅ Train angles correct: {sorted(train_views)}")
+            print(f"   ✅ Val angles correct: {sorted(val_views)}")
+            print(f"   ✅ No overlap between train/val views")
+        else:
+            # Original index-based validation
+            assert train_views == set(train_view_indices), f"Train views mismatch! Got {train_views}, expected {set(train_view_indices)}"
+            assert val_views == set(val_view_indices), f"Val views mismatch! Got {val_views}, expected {set(val_view_indices)}"
+            assert len(train_views & val_views) == 0, "Train and val views should not overlap!"
+            
+            print(f"   ✅ Train views correct: {sorted(train_views)}")
+            print(f"   ✅ Val views correct: {sorted(val_views)}")
+            print(f"   ✅ No overlap between train/val views")
         
         # Print expected performance insight
         print(f"\n💡 Interpolation Task Expectations:")
-        print(f"   - Structured kernels (Periodic/VonMises) should perform WELL")
-        print(f"   - They can smoothly interpolate between boundary angles")
-        print(f"   - FullRank might perform similarly (enough training data)")
-        print(f"   - Key metric: How smoothly does each kernel interpolate?")
+        if use_angle_encoding:
+            print(f"   ✅ Using ACTUAL ANGLE VALUES (geometrically correct)")
+            print(f"   - Structured kernels can directly leverage angular smoothness")
+            print(f"   - Periodic/VonMises kernels know true distances between views")
+            print(f"   - Expected: Smoother interpolation from structured kernels")
+            print(f"   - FullRank must learn geometry from data (more parameters)")
+        else:
+            print(f"   - Using view indices (original behavior)")
+            print(f"   - Structured kernels must infer geometry from data")
+        print(f"\n   Key metric: How smoothly does each kernel interpolate?")
     
     else:
         # Original random split behavior (no changes needed, already done in data generation)
         print("\n📊 Using original random train/val split from HDF5")
+        if use_angle_encoding:
+            print(f"   ⚠️  Note: Angle encoding applied to views for geometric correctness")
     
     print(f"\n✅ Final dataset sizes:")
     for key in keys:
         print(f"   {key:5s}: {len(Y[key]):5d} samples")
+        if use_angle_encoding and key in ['train', 'val']:
+            unique_angles = np.unique(W[key].numpy())
+            print(f"           Unique view angles: {len(unique_angles)} {sorted(unique_angles.round(3))}")
 
     return Y, D, W

@@ -77,10 +77,18 @@ def callback(epoch, val_queue, vae, history, figname, device):
         _x = 0.5 * (_x[:-1] + _x[1:])
         pl.plot(_x, _y, "k")
 
-        # val reconstructions
-        _zm = Variable(torch.tensor(zm[:24]), requires_grad=False).to(device)
-        Rv = vae.decode(_zm[:24]).data.cpu().numpy().transpose((0, 2, 3, 1))
-        Yv = val_queue.dataset.Y[:24].numpy().transpose((0, 2, 3, 1))
+        # Sample diverse validation samples for visualization
+        n_val = val_queue.dataset.Y.shape[0]
+        if n_val >= 24:
+            sample_stride = max(1, n_val // 24)
+            sample_indices = np.arange(0, n_val, sample_stride)[:24]
+        else:
+            sample_indices = np.arange(min(24, n_val))
+        
+        # val reconstructions with diverse sampling
+        _zm = Variable(torch.tensor(zm[sample_indices]), requires_grad=False).to(device)
+        Rv = vae.decode(_zm).data.cpu().numpy().transpose((0, 2, 3, 1))
+        Yv = val_queue.dataset.Y[sample_indices].numpy().transpose((0, 2, 3, 1))
 
         # make plot
         pl.subplot(4, 2, 2)
@@ -152,59 +160,76 @@ def callback_gppvae0(epoch, history, covs, imgs, ffile):
 
 def callback_gppvae(epoch, history, covs, imgs, ffile):
 
-    # init fig
-    pl.figure(1, figsize=(8, 8))
+    # init fig with adjusted layout
+    fig = pl.figure(1, figsize=(10, 8))
+    pl.subplots_adjust(left=0.08, right=0.96, top=0.94, bottom=0.06, hspace=0.4, wspace=0.4)
+    
     pl.subplot(4, 4, 1)
-    pl.title("loss")
+    pl.title("loss", fontsize=9)
     pl.plot(history["loss"], "k")
     pl.subplot(4, 4, 2)
-    pl.title("vars")
+    pl.title("vars", fontsize=9)
     pl.plot(np.array(history["vs"])[:, 0], "r")
     pl.plot(np.array(history["vs"])[:, 1], "k")
     pl.ylim(0, 1)
     pl.subplot(4, 4, 5)
-    pl.title("recon_term")
+    pl.title("recon_term", fontsize=9)
     pl.plot(history["recon_term"], "k")
     pl.subplot(4, 4, 6)
-    pl.title("gp_nll")
+    pl.title("gp_nll", fontsize=9)
     pl.plot(history["gp_nll"], "k")
     pl.subplot(4, 4, 9)
-    pl.title("mse_out")
+    pl.title("mse_out", fontsize=9)
     pl.plot(history["mse_out"], "k")
     pl.ylim(0, 0.1)
     pl.subplot(4, 4, 10)
-    pl.title("mse")
+    pl.title("mse_0", fontsize=9)
     pl.plot(history["mse"], "k")
     pl.plot(history["mse_val"], "r")
     pl.ylim(0, 0.01)
 
     pl.subplot(4, 4, 13)
-    pl.title("XX")
+    pl.title("XX", fontsize=9)
     pl.imshow(covs["XX"], vmin=-0.4, vmax=1)
     pl.colorbar()
     pl.subplot(4, 4, 14)
-    pl.title("WW")
+    pl.title("WW", fontsize=9)
     pl.imshow(covs["WW"], vmin=-0.4, vmax=1)
     pl.colorbar()
 
     Yv, Yr, Rv = imgs["Yv"], imgs["Yr"], imgs["Yo"]
 
-    # make plot
-    pl.subplot(4, 2, 2)
+    # Sample diverse identities across the validation set
+    # Instead of first 24, take evenly spaced samples for ethnic diversity
+    n_total = Yv.shape[0]
+    if n_total >= 24:
+        sample_stride = max(1, n_total // 24)  # Take every Nth sample
+        sample_indices = np.arange(0, n_total, sample_stride)[:24]
+        Yv = Yv[sample_indices]
+        Yr = Yr[sample_indices]
+        Rv = Rv[sample_indices]
+
+    # make plot with column titles
+    ax1 = pl.subplot(4, 2, 2)
     _img = _compose_multi([Yv[0:6], Yr[0:6], Rv[0:6]])
     pl.imshow(_img)
+    pl.axis('off')
+    pl.title("Ground Truth | VAE Recon | GP Pred", fontsize=8, pad=3)
 
-    pl.subplot(4, 2, 4)
+    ax2 = pl.subplot(4, 2, 4)
     _img = _compose_multi([Yv[6:12], Yr[6:12], Rv[6:12]])
     pl.imshow(_img)
+    pl.axis('off')
 
-    pl.subplot(4, 2, 6)
+    ax3 = pl.subplot(4, 2, 6)
     _img = _compose_multi([Yv[12:18], Yr[12:18], Rv[12:18]])
     pl.imshow(_img)
+    pl.axis('off')
 
-    pl.subplot(4, 2, 8)
+    ax4 = pl.subplot(4, 2, 8)
     _img = _compose_multi([Yv[18:24], Yr[18:24], Rv[18:24]])
     pl.imshow(_img)
+    pl.axis('off')
 
-    pl.savefig(ffile)
+    pl.savefig(ffile, dpi=150, bbox_inches='tight')
     pl.close()

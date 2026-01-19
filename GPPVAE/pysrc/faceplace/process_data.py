@@ -137,15 +137,15 @@ def unzip_data():
 
 def import_data(size=128):
 
-    files = []
     # ORDER BY ANGLE (left to right): -90° to +90°
     # This ensures view indices follow geometric progression for kernel methods
     orients = ["90L", "60L", "45L", "30L", "00F", "30R", "45R", "60R", "90R"]
     #          -90°   -60°   -45°   -30°    0°    +30°   +45°   +60°   +90°
     #          idx:0  idx:1  idx:2  idx:3  idx:4  idx:5  idx:6  idx:7  idx:8
     
-    # Track files by ethnicity
-    files_by_ethnicity = {}
+    # Step 1: Collect all files organized by (ethnicity → person → view)
+    # Key: (ethnicity, person_id), Value: dict of {orient: filepath}
+    person_files = {}
     
     for orient in orients:
         if ETHNICITY_FILTER is None:
@@ -158,38 +158,72 @@ def import_data(size=128):
                 eth_files = glob.glob(os.path.join(data_dir, eth + "/*_%s.jpg" % orient))
                 _files.extend(eth_files)
         
-        # Group by ethnicity folder
+        # Group by (ethnicity, person)
         for f in _files:
-            ethnicity = f.split("/")[-2]  # Extract folder name
-            if ethnicity not in files_by_ethnicity:
-                files_by_ethnicity[ethnicity] = []
-            files_by_ethnicity[ethnicity].append(f)
+            ethnicity = f.split("/")[-2]  # Extract folder name (ethnicity)
+            filename = f.split("/")[-1]
+            # Extract person ID: "BF0601_1100_00F.jpg" → "BF0601_1100"
+            person_id = "_".join(filename.split("_")[:2])
+            
+            key = (ethnicity, person_id)
+            if key not in person_files:
+                person_files[key] = {}
+            person_files[key][orient] = f
     
-    # Balance classes if requested
+    # Step 2: Filter to only keep people with ALL 9 views
+    complete_people = {key: files for key, files in person_files.items() 
+                      if len(files) == 9}  # Must have all 9 orientations
+    
+    incomplete_count = len(person_files) - len(complete_people)
+    if incomplete_count > 0:
+        print(f"\n⚠️  Filtered out {incomplete_count} people with incomplete views")
+    
+    # Step 3: Organize by ethnicity for potential balancing
+    files_by_ethnicity = {}
+    for (ethnicity, person_id), view_dict in complete_people.items():
+        if ethnicity not in files_by_ethnicity:
+            files_by_ethnicity[ethnicity] = []
+        
+        # Add this person's 9 views IN ANGULAR ORDER
+        person_views = [view_dict[orient] for orient in orients]
+        files_by_ethnicity[ethnicity].extend(person_views)
+    
+    # Step 4: Balance classes if requested
     if BALANCE_CLASSES and len(files_by_ethnicity) > 1:
-        min_count = min(len(files_by_ethnicity[eth]) for eth in files_by_ethnicity)
-        print(f"\n⚖️  BALANCING CLASSES: undersampling to {min_count} images per ethnicity")
+        # Count people per ethnicity (divide by 9 since each person has 9 views)
+        people_per_eth = {eth: len(files_by_ethnicity[eth]) // 9 
+                         for eth in files_by_ethnicity}
+        min_people = min(people_per_eth.values())
+        
+        print(f"\n⚖️  BALANCING CLASSES: undersampling to {min_people} people per ethnicity")
         
         balanced_files = {}
         np.random.seed(42)  # Reproducible sampling
         for eth in files_by_ethnicity:
-            # Randomly sample min_count files
-            sampled = np.random.choice(files_by_ethnicity[eth], min_count, replace=False)
-            balanced_files[eth] = list(sampled)
+            # Sample complete people (9 views each)
+            n_people = len(files_by_ethnicity[eth]) // 9
+            people_indices = np.arange(n_people)
+            sampled_people = np.random.choice(people_indices, min_people, replace=False)
+            
+            # Extract selected people (each person = 9 consecutive files)
+            sampled_files = []
+            for person_idx in sorted(sampled_people):
+                start = person_idx * 9
+                sampled_files.extend(files_by_ethnicity[eth][start:start+9])
+            
+            balanced_files[eth] = sampled_files
         files_by_ethnicity = balanced_files
     
-    # Flatten to single list with better mixing across ethnicities
-    # Instead of grouping all of one ethnicity together, interleave them
+    # Step 5: Flatten to single list PRESERVING PERSON-VIEW STRUCTURE
+    # IMPORTANT: Do NOT interleave by ethnicity!
+    # GP-VAE requires all 9 views of each person to be together
+    # The angular ordering (90L → 60L → ... → 90R) must be preserved per person
     files = []
-    ethnicity_lists = {eth: files_by_ethnicity[eth][:] for eth in sorted(files_by_ethnicity.keys())}
+    for eth in sorted(files_by_ethnicity.keys()):
+        files.extend(files_by_ethnicity[eth])
     
-    # Interleave: take one from each ethnicity in round-robin fashion
-    while any(ethnicity_lists.values()):
-        for eth in sorted(ethnicity_lists.keys()):
-            if ethnicity_lists[eth]:
-                files.append(ethnicity_lists[eth].pop(0))
-    
-    print(f"\n🔀 MIXING: Ethnicities interleaved for better batch diversity")
+    print(f"\n📋 STRUCTURE: Files organized by (ethnicity → person → views)")
+    print(f"   Each person has 9 consecutive views in angular order")
     
     # Print distribution
     print(f"\n📊 ETHNICITY DISTRIBUTION:")
@@ -262,24 +296,118 @@ def import_data(size=128):
 
 def split_data(RV):
 
+    # CRITICAL: Split by PERSON, not by individual samples
+    # Each person has 9 consecutive views in the dataset
+    # We need to keep all 9 views together in the same split
+    
+    # seed for splitting data
     np.random.seed(0)
-    # Split data: 80% train, 10% test, 10% validation
-    n_train = int(4 * RV["Y"].shape[0] / 5.0)  
-    n_test = int(1 * RV["Y"].shape[0] / 10.0)  
-
-    # Randomly shuffle indices
-    idxs = np.random.permutation(RV["Y"].shape[0])
-    idxs_train = idxs[:n_train]
-    idxs_test = idxs[n_train : (n_train + n_test)]
-    idxs_val = idxs[(n_train + n_test) :]  # Remaining 10% for validation
-
-    # Create boolean masks for indexing
-    # Itrain: boolean array indicating which samples are in training set
-    Itrain = np.in1d(np.arange(RV["Y"].shape[0]), idxs_train)
-    # Itest: boolean array indicating which samples are in test set
-    Itest = np.in1d(np.arange(RV["Y"].shape[0]), idxs_test)
-    # Ival: boolean array indicating which samples are in validation set
-    Ival = np.in1d(np.arange(RV["Y"].shape[0]), idxs_val)
+    
+    # Get unique people and count them
+    unique_people = np.unique(RV["Did"])
+    n_people = len(unique_people)
+    
+    print(f"\n📊 Split strategy: Person-level (not sample-level)")
+    print(f"   Total people: {n_people}")
+    print(f"   Samples per person: 9 views")
+    print(f"   Total samples: {RV['Y'].shape[0]}")
+    
+    # Split people: 80% train, 10% test, 10% validation
+    n_people_train = int(0.8 * n_people)
+    n_people_test = int(0.1 * n_people)
+    # Remaining goes to validation
+    
+    # Randomly shuffle person indices
+    person_idxs = np.random.permutation(n_people)
+    people_train = unique_people[person_idxs[:n_people_train]]
+    people_test = unique_people[person_idxs[n_people_train:(n_people_train + n_people_test)]]
+    people_val = unique_people[person_idxs[(n_people_train + n_people_test):]]
+    
+    print(f"\n📋 Split breakdown:")
+    print(f"   Train: {len(people_train)} people × 9 views = {len(people_train) * 9} samples")
+    print(f"   Test:  {len(people_test)} people × 9 views = {len(people_test) * 9} samples")
+    print(f"   Val:   {len(people_val)} people × 9 views = {len(people_val) * 9} samples")
+    
+    # Create boolean masks based on person membership
+    # Itrain: boolean array indicating which samples belong to training people
+    Itrain = np.isin(RV["Did"], people_train)
+    # Itest: boolean array indicating which samples belong to test people
+    Itest = np.isin(RV["Did"], people_test)
+    # Ival: boolean array indicating which samples belong to validation people
+    Ival = np.isin(RV["Did"], people_val)
+    
+    # Verification: Each split should have all 9 views per person
+    print(f"\n✅ Verification:")
+    print(f"   Train samples: {np.sum(Itrain)} (expected: {len(people_train) * 9})")
+    print(f"   Test samples:  {np.sum(Itest)} (expected: {len(people_test) * 9})")
+    print(f"   Val samples:   {np.sum(Ival)} (expected: {len(people_val) * 9})")
+    
+    # Verify no overlap
+    assert not np.any(Itrain & Itest), "Train and test overlap!"
+    assert not np.any(Itrain & Ival), "Train and val overlap!"
+    assert not np.any(Itest & Ival), "Test and val overlap!"
+    print(f"   ✅ No person appears in multiple splits")
+    
+    # Check ethnicity distribution across splits
+    # Extract ethnicity from Did (format: "ethnicity/PERSONID_SESSION")
+    print(f"\n📊 Ethnicity distribution across splits:")
+    
+    def get_ethnicity_counts(did_array):
+        """Extract ethnicity from person IDs and count them"""
+        # Since Did format is "PERSONID_SESSION", we need to track which ethnicity folder they came from
+        # This info isn't directly in Did, but we can infer from the file organization
+        return len(np.unique(did_array))
+    
+    print(f"   Train unique people: {len(people_train)}")
+    print(f"   Test unique people:  {len(people_test)}")
+    print(f"   Val unique people:   {len(people_val)}")
+    print(f"   Note: Ethnicity distribution depends on original folder organization")
+    print(f"   With random seed(0), ethnicities should be mixed across splits")
+    
+    # Check ethnicity distribution in each split
+    print(f"\n📊 ETHNICITY DISTRIBUTION BY SPLIT:")
+    print(f"=" * 80)
+    
+    # Extract ethnicity from Did (format: "BF0601_1100" where BF = Black Female, etc.)
+    # But actually, we need to track ethnicity from file paths
+    # Since we don't have that info here, let's count unique people per split
+    # and check view distribution instead
+    
+    # However, we can infer ethnicity from the person IDs if needed
+    # For now, let's verify each person has all 9 views in their split
+    
+    print(f"\n🔍 Verifying person completeness in each split:")
+    for split_name, mask in [("Train", Itrain), ("Test", Itest), ("Val", Ival)]:
+        split_people = np.unique(RV["Did"][mask])
+        split_rids = RV["Rid"][mask]
+        
+        # Check each person has all 9 views
+        incomplete_people = []
+        for person in split_people:
+            person_mask = (RV["Did"] == person) & mask
+            person_views = len(RV["Rid"][person_mask])
+            if person_views != 9:
+                incomplete_people.append((person.decode('utf-8'), person_views))
+        
+        if incomplete_people:
+            print(f"   ❌ {split_name}: {len(incomplete_people)} people with incomplete views!")
+            for pid, nviews in incomplete_people[:5]:  # Show first 5
+                print(f"      {pid}: {nviews}/9 views")
+        else:
+            print(f"   ✅ {split_name}: All {len(split_people)} people have complete 9 views")
+        
+        # View distribution
+        unique_views, view_counts = np.unique(split_rids, return_counts=True)
+        view_dist = {v.decode('utf-8'): c for v, c in zip(unique_views, view_counts)}
+        expected_per_view = len(split_people)
+        
+        all_equal = all(c == expected_per_view for c in view_counts)
+        if all_equal:
+            print(f"   ✅ {split_name}: All views have {expected_per_view} samples (balanced)")
+        else:
+            print(f"   ⚠️  {split_name}: Unbalanced view distribution:")
+            for view, count in sorted(view_dist.items()):
+                print(f"      {view}: {count} (expected: {expected_per_view})")
 
     out = {}
     # Split each dataset (Y, Did, Rid) into train/val/test
