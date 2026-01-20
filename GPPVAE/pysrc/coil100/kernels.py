@@ -21,7 +21,7 @@ import numpy as np
 def wrapped_lag_distance(angles):
     """
     Compute wrapped lag distance matrix for circular data.
-    
+    z
     d(theta, theta') = min(|theta - theta'|, 360 - |theta - theta'|)
     
     Args:
@@ -58,17 +58,21 @@ class FullRankKernel(nn.Module):
         # Initialize L as identity matrix
         L_init = torch.eye(Q)
         self.L = nn.Parameter(L_init)
+        
+        # Register a buffer for creating lower triangular mask on correct device
+        self.register_buffer('_ones', torch.ones(Q, Q))
     
     def forward(self, angles=None):
         """
         Compute K = L @ L^T
         
         Args:
-            angles: Ignored (kept for API compatibility)
+            angles: Ignored (kept for API compatibility), but used for device info
             
         Returns:
             K: (Q, Q) positive semi-definite covariance matrix
         """
+        # Use tril mask that's on the same device as self.L
         L_lower = torch.tril(self.L)
         K = torch.mm(L_lower, L_lower.t())
         return K
@@ -137,7 +141,7 @@ class SMCircleKernel(nn.Module):
     
     k(theta, theta') = sum_q w_q * exp(-2*pi^2 * var_q * d^2) * cos(2*pi * mu_q * d)
     
-    where d is the wrapped lag distance.
+    where d is the wrapped lag distance (or raw angle difference if use_angle_input=True).
     
     Learnable parameters per mixture component:
     - weights: Mixture weights (softmax normalized)
@@ -145,24 +149,64 @@ class SMCircleKernel(nn.Module):
     - variances: Bandwidths (inverse lengthscales)
     """
     
-    def __init__(self, num_mixtures=2):
+    def __init__(self, num_mixtures=2, freq_init=None, length_init=None, weight_init=None,
+                 use_angle_input=False, period=360.0):
         """
         Args:
             num_mixtures: Number of spectral mixture components (default: 2)
                           Using 2-3 mixtures to avoid overfitting with 18 views.
+            freq_init: Optional list/array of initial frequencies (means). If None, uses linspace(0.01, 0.1)
+            length_init: Optional list/array of initial lengthscales. If None, uses 30.0 for all
+            weight_init: Optional list/array of initial weights. If None, uses uniform (equal weights)
+            use_angle_input: If True, use raw |angle_diff| like periodic kernel instead of wrapped lag.
+                            This makes the kernel work directly with angle differences.
+            period: Period in degrees (default: 360), only used if use_angle_input=True
         """
         super(SMCircleKernel, self).__init__()
         self.num_mixtures = num_mixtures
+        self.use_angle_input = use_angle_input
+        self.period = period
         
-        # Mixture weights (softmax will be applied)
-        self.log_weights = nn.Parameter(torch.zeros(num_mixtures))
+        # Mixture weights (softmax will be applied, so log-space for uniform = zeros)
+        if weight_init is not None:
+            # Convert weights to log-space (before softmax)
+            weights = torch.tensor(weight_init, dtype=torch.float32)
+            self.log_weights = nn.Parameter(torch.log(weights + 1e-8))
+        else:
+            self.log_weights = nn.Parameter(torch.zeros(num_mixtures))
         
         # Means (frequencies) - initialize spread across frequency range
-        # Scale for degrees: typical frequencies for 360 period
-        self.means = nn.Parameter(torch.linspace(0.01, 0.1, num_mixtures))
+        if freq_init is not None:
+            self.means = nn.Parameter(torch.tensor(freq_init, dtype=torch.float32))
+        else:
+            # Scale for degrees: typical frequencies for 360 period
+            self.means = nn.Parameter(torch.linspace(0.01, 0.1, num_mixtures))
         
         # Variances (bandwidths) - store log for positivity
-        self.log_variances = nn.Parameter(torch.zeros(num_mixtures))
+        # variance ≈ 1/lengthscale² in spectral space
+        # CRITICAL: Default variance depends on distance scale!
+        #
+        # use_angle_input=False: D is in degrees [0, 180]
+        #   exp(-2*π²*var*D²) with D=20° and var=0.0001 → exp(-0.79) ≈ 0.45 ✓
+        #
+        # use_angle_input=True: D is normalized [0, 1] (D = |diff|/period)
+        #   exp(-2*π²*var*D²) with D=0.056 (20°) and var=0.0001 → exp(-0.00006) ≈ 1.0 ✗
+        #   Need var ~ 1.0 for exp(-2*π²*1.0*0.056²) ≈ 0.94, exp(0.5²) ≈ 0.08
+        if length_init is not None:
+            lengthscales = torch.tensor(length_init, dtype=torch.float32)
+            # Convert lengthscale to variance (approximate inverse relationship)
+            variances = 1.0 / (lengthscales ** 2 + 1e-8)
+            self.log_variances = nn.Parameter(torch.log(variances))
+        else:
+            if use_angle_input:
+                # D is normalized [0, 1], need larger variance
+                # var=1.0 gives good range: exp(0.056)≈0.94, exp(0.5)≈0.08
+                default_var = 1.0
+            else:
+                # D is in degrees [0, 180], need small variance
+                # var=0.0001 gives exp(20°)≈0.45 for adjacent views
+                default_var = 0.0001
+            self.log_variances = nn.Parameter(torch.full((num_mixtures,), np.log(default_var)))
     
     @property
     def weights(self):
@@ -174,7 +218,7 @@ class SMCircleKernel(nn.Module):
     
     def forward(self, angles):
         """
-        Compute Spectral Mixture kernel with wrapped distance.
+        Compute Spectral Mixture kernel.
         
         Args:
             angles: (Q,) tensor of angles in degrees [0, 360)
@@ -182,8 +226,14 @@ class SMCircleKernel(nn.Module):
         Returns:
             K: (Q, Q) kernel matrix
         """
-        # Compute wrapped lag distance
-        D = wrapped_lag_distance(angles)  # (Q, Q)
+        if self.use_angle_input:
+            # Use raw angle differences like periodic kernel (periodicity built into cos term)
+            diff = torch.abs(angles.unsqueeze(1) - angles.unsqueeze(0))  # (Q, Q)
+            # Normalize by period for frequency interpretation
+            D = diff / self.period  # Now in [0, 1] for one period
+        else:
+            # Use wrapped lag distance (circular)
+            D = wrapped_lag_distance(angles)  # (Q, Q)
         
         K = torch.zeros_like(D)
         
@@ -200,7 +250,8 @@ class SMCircleKernel(nn.Module):
         return K
     
     def __repr__(self):
-        return "SMCircleKernel(num_mixtures={})".format(self.num_mixtures)
+        mode = "angle" if self.use_angle_input else "wrapped"
+        return "SMCircleKernel(num_mixtures={}, mode={})".format(self.num_mixtures, mode)
 
 
 class PeriodicKernel(nn.Module):
@@ -287,7 +338,17 @@ def create_kernel(kernel_type, Q=None, **kwargs):
     
     elif kernel_type == 'sm_circle':
         num_mixtures = kwargs.get('num_mixtures', 2)  # 2 mixtures default (less overfitting)
-        return SMCircleKernel(num_mixtures=num_mixtures)
+        freq_init = kwargs.get('freq_init', None)
+        length_init = kwargs.get('length_init', None)
+        weight_init = kwargs.get('weight_init', None)
+        use_angle_input = kwargs.get('use_angle_input', False)
+        period = kwargs.get('period', 360.0)
+        return SMCircleKernel(num_mixtures=num_mixtures, 
+                            freq_init=freq_init, 
+                            length_init=length_init,
+                            weight_init=weight_init,
+                            use_angle_input=use_angle_input,
+                            period=period)
     
     elif kernel_type == 'periodic':
         lengthscale = kwargs.get('lengthscale', 1.0)
