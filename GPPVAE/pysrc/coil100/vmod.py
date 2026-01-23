@@ -93,16 +93,16 @@ class Vmodel(nn.Module):
         K = self.kernel(self.angles)  # (Q, Q)
         
         # Add jitter for numerical stability
-        K = K + 1e-6 * torch.eye(self.Q, device=K.device)
+        K = K + 1e-4 * torch.eye(self.Q, device=K.device)
         
         # Cholesky decomposition: K = L @ L^T
-        # Use torch.cholesky for compatibility with older PyTorch
         try:
-            L = torch.cholesky(K)
+            L = torch.linalg.cholesky(K)
         except RuntimeError:
             # Fallback to eigendecomposition if Cholesky fails
-            eigvals, eigvecs = torch.symeig(K, eigenvectors=True)
-            eigvals = torch.clamp(eigvals, min=1e-6)
+            # torch.linalg.eigh replaces deprecated torch.symeig
+            eigvals, eigvecs = torch.linalg.eigh(K)
+            eigvals = torch.clamp(eigvals, min=1e-5)
             L = eigvecs @ torch.diag(torch.sqrt(eigvals))
         
         return L  # (Q, Q)

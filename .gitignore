@@ -12,6 +12,7 @@ wheels/
 
 # Data files
 data/*
+tests
 
 # Training outputs
 out/
