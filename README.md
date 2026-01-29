@@ -106,6 +106,22 @@ python ./GPPVAE/pysrc/faceplace/train_gppvae.py \
   --epochs 5000
 ```
 
+## Google Colab & Experiment Tracking
+
+Most experiments in this project were executed on **Google Colab** due to computational requirements.  
+Training runs are logged and tracked using **Weights & Biases (wandb)**.
+
+- Colab notebooks used for training and evaluation are provided in the `notebooks/` directory.
+- Each notebook corresponds to a specific experiment type (VAE pretraining, GPPVAE training, kernel comparison).
+- wandb logging can be enabled or disabled via the `--use_wandb` flag.
+
+To run experiments on Colab:
+1. Open a notebook from `notebooks/`
+2. Set your wandb API key (if logging is enabled)
+3. Execute the notebook cells sequentially
+
+Note: Results reported in the seminar project correspond to the Colab-based runs with fixed random seeds.
+
 ## Hyperparameters
 
 All hyperparameters with detailed explanations are in `GPPVAE/pysrc/faceplace/config.yml`.
