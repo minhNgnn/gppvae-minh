@@ -1,4 +1,17 @@
-# GPPVAE Training
+# GPPVAE - Experiments in kernel learning
+This repository contains an experimental study of [**Gaussian Process Prior Variational Autoencoders (GPPVAE)**](https://proceedings.neurips.cc/paper/2018/hash/1c336b8080f82bcc2cd2499b4c57261d-Abstract.html) [1] with a focus on the role of **kernel choice as an inductive bias**.
+
+Building on the original GPPVAE framework, this project systematically evaluates how different Gaussian Process priors—ranging from fixed geometric kernels to flexible learned kernels—affect representation quality, interpolation, and extrapolation in latent space. In particular, we compare:
+
+- full-rank (unconstrained) kernels,
+- hand-designed periodic kernels for circular geometry,
+- Spectral Mixture kernels with both wrapped (geometry-aware) and free formulations.
+
+Experiments are conducted on image datasets with known or partially known view structure, including controlled rotations on a circular domain. The experimental design fixes the VAE architecture and inference procedure, varying **only the GP prior**, in order to isolate the effect of kernel structure.
+
+The results highlight that while flexible kernels can capture local similarity, explicitly encoding geometric structure is crucial for robust interpolation and long-range extrapolation. This repository accompanies a seminar project and is intended for research and educational purposes.
+
+[1] Casale FP, Dalca AV, Saglietti L, Listgarten J, Fusi N. Gaussian process prior variational autoencoders. Advances in Neural Information Processing Systems, 31, 10390–10401.
 
 ## Setup Environment
 
@@ -14,6 +27,7 @@ conda config --env --set subdir osx-64
 ```bash
 # Process face images into HDF5 format (only need to run once)
 python ./GPPVAE/pysrc/faceplace/process_data.py
+python ./GPPVAE/pysrc/coil100/process_data.py
 ```
 
 ## Training Commands
@@ -111,26 +125,12 @@ All hyperparameters with detailed explanations are in `GPPVAE/pysrc/faceplace/co
 - **vae_cfg**: Path to trained VAE config (automatically set from config.yml)
 - **vae_weights**: Path to trained VAE weights (automatically set from config.yml)
 
-## Expected Training Times (M1 Pro)
-
-### VAE:
-- 10 epochs: ~2 minutes (quick test)
-- 1000 epochs: ~2-4 hours (good results)
-- 10000 epochs: ~20-40 hours (full training)
-
-### GPPVAE:
-- 10 epochs: ~3-5 minutes (quick test)
-- 1000 epochs: ~3-5 hours (good results)
-- 10000 epochs: ~25-50 hours (full training)
-
-**Note:** GPPVAE is slower than VAE because it includes Gaussian Process computations.
-
 ## Acknowledgements
 
 Parts of this codebase are adapted from the original GPPVAE implementation introduced in:
 
 Francesco Paolo Casale, Adrian Dalca, Luca Saglietti, Jennifer Listgarten, and Nicolo Fusi.  
-*Gaussian Process Prior Variational Autoencoders*.  
+**Gaussian Process Prior Variational Autoencoders**.  
 Advances in Neural Information Processing Systems (NeurIPS), 2018.
 
 Original repository:  
