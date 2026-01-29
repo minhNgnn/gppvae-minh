@@ -124,3 +124,21 @@ All hyperparameters with detailed explanations are in `GPPVAE/pysrc/faceplace/co
 - 10000 epochs: ~25-50 hours (full training)
 
 **Note:** GPPVAE is slower than VAE because it includes Gaussian Process computations.
+
+## Acknowledgements
+
+Parts of this codebase are adapted from the original GPPVAE implementation introduced in:
+
+Francesco Paolo Casale, Adrian Dalca, Luca Saglietti, Jennifer Listgarten, and Nicolo Fusi.  
+*Gaussian Process Prior Variational Autoencoders*.  
+Advances in Neural Information Processing Systems (NeurIPS), 2018.
+
+Original repository:  
+https://github.com/fpcasale/GPPVAE
+
+The original code is released under the MIT License.
+
+Modifications in this repository include:
+- custom kernel compositions
+- altered training procedures
+- new experimental protocols
